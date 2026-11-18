@@ -1,0 +1,3 @@
+# The two files we were given are stored byte for byte, without line-ending conversion.
+sales.csv -text
+test_virtual_column.py -text
