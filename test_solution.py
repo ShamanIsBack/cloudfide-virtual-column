@@ -126,3 +126,52 @@ def test_frame_with_no_rows_keeps_its_columns():
     result = add_virtual_column(df, "a + b", "new")
     assert list(result.columns) == ["a", "b", "new"]
     assert len(result) == 0
+
+
+# Inputs found by the review: each used to crash or give a wrong result ---------
+
+@pytest.mark.parametrize(
+    "columns",
+    [
+        {"a": [True, False], "b": [False, False]},      # true/false cannot be subtracted
+        {"a": ["x", "y"], "b": ["z", "w"]},             # text would be joined: "x" + "z" = "xz"
+        {"a": pd.to_datetime(["2026-01-01", "2026-01-02"]), "b": [1, 2]},
+        {"a": pd.Categorical([1, 2]), "b": [1, 2]},
+    ],
+)
+def test_non_numeric_columns_in_the_formula(columns):
+    assert_invalid(add_virtual_column(pd.DataFrame(columns), "a - b", "new"))
+
+
+def test_text_column_not_used_in_the_formula_is_fine():
+    # The task's own example has a text column (name) next to the numbers.
+    df = pd.DataFrame({"name": ["banana", "apple"], "quantity": [10, 3], "price": [10, 1]})
+    result = add_virtual_column(df, "quantity * price", "total")
+    assert result.equals(with_column(df, "total", [100, 3]))
+
+
+@pytest.mark.parametrize("role", ["a * ٣", "a * １"])  # Arabic-Indic 3, fullwidth 1
+def test_only_ascii_digits_are_numbers(df, role):
+    assert_invalid(add_virtual_column(df, role, "new"))
+
+
+def test_number_too_large_for_the_column(df):
+    assert_invalid(add_virtual_column(df, "a * " + "9" * 400, "new"))
+
+
+def test_number_with_too_many_digits_for_int(df):
+    assert_invalid(add_virtual_column(df, "a * " + "9" * 5000, "new"))
+
+
+def test_brackets_nested_very_deep(df):
+    assert_invalid(add_virtual_column(df, "(" * 1000 + "a" + ")" * 1000, "new"))
+
+
+@pytest.mark.parametrize("not_a_frame", [None, {"a": [1]}, [[1, 2]]])
+def test_input_that_is_not_a_dataframe(not_a_frame):
+    assert_invalid(add_virtual_column(not_a_frame, "a", "new"))
+
+
+def test_duplicate_column_labels():
+    df = pd.DataFrame([[1, 2]], columns=["a", "a"])
+    assert_invalid(add_virtual_column(df, "a + a", "new"))

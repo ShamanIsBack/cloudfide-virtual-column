@@ -1,6 +1,7 @@
 import re
 
 import pandas
+from pandas.api.types import is_bool_dtype, is_numeric_dtype
 
 # Step 1: the tokeniser ----------------------------------------------------------
 
@@ -10,7 +11,7 @@ PIECE = re.compile(r"[A-Za-z0-9_.]+|[-+*()]|\S")
 
 # Then judge strictly.
 LABEL = re.compile(r"[A-Za-z_]+")
-NUMBER = re.compile(r"\d+(\.\d+)?")
+NUMBER = re.compile(r"[0-9]+(\.[0-9]+)?")  # not \d: it also matches digits like "٣"
 OPERATORS = {"+", "-", "*", "(", ")"}
 
 
@@ -91,7 +92,12 @@ class Parser:
             _, name = self.take()
             if name not in self.df.columns:
                 raise InvalidRole(f"no column {name!r}")
-            return self.df[name]
+            column = self.df[name]
+            # Only numbers can be added or multiplied. Text would be joined ("x" + "z" = "xz")
+            # and true/false cannot be subtracted, so both are rejected.
+            if not is_numeric_dtype(column) or is_bool_dtype(column):
+                raise InvalidRole(f"column {name!r} is not numeric")
+            return column
         if kind == "number":
             _, text = self.take()
             return float(text) if "." in text else int(text)
@@ -105,21 +111,26 @@ class Parser:
         raise InvalidRole(f"expected a column, a number or '(', got {kind!r}")
 
 
-# Step 3: the function the brief asks for ----------------------------------------
+# Step 3: add_virtual_column ---------------------------------------------------
 
 
 def add_virtual_column(df: pandas.DataFrame, role: str, new_column: str) -> pandas.DataFrame:
     empty = pandas.DataFrame([])
+    if not isinstance(df, pandas.DataFrame):
+        return empty
 
     # Every label must be letters and underscores: the frame's columns and the new one.
-    labels_ok = all(isinstance(label, str) and LABEL.fullmatch(label) for label in df.columns)
+    labels_ok = df.columns.is_unique and all(isinstance(label, str) and LABEL.fullmatch(label) for label in df.columns)
     new_ok = isinstance(new_column, str) and LABEL.fullmatch(new_column) and new_column not in df.columns
     if not (labels_ok and new_ok and isinstance(role, str)):
         return empty
 
     try:
         value = Parser(tokenize(role), df).parse()
-    except InvalidRole:
+    except (InvalidRole, OverflowError, RecursionError, ValueError):
+        # OverflowError: a number too large for the column type ("a * 999...9").
+        # ValueError: a number with more than 4300 digits, which int() refuses.
+        # RecursionError: brackets nested hundreds deep.
         return empty
 
     if not isinstance(value, pandas.Series):  # only numbers, e.g. "2 * 3": no column used
